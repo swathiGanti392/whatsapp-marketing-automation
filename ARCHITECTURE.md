@@ -1,5 +1,9 @@
 # WhatsApp Marketing Automation Architecture
 
+For the Shraddha Properties pilot, see the [pilot architecture and action
+plan](./docs/PILOT-ARCHITECTURE.md). It distinguishes the deployed POC from the
+proposed queue, worker, persistent state, delivery tracking, and recovery design.
+
 ## Overview
 
 This document details the technical architecture for a comprehensive WhatsApp marketing automation platform.

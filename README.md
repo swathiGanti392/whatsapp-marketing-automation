@@ -350,6 +350,11 @@ python manage.py runserver
 
 ## Documentation
 
+- [Product Roadmap](./PRODUCT-ROADMAP.md) - Six-week productionization timeline, weekly progress bars, milestones, and go-live checks
+- [Resume / Session Handoff](./docs/RESUME.md) - Current deployment, completed work, verification, and remaining production steps
+- [Lead and Visit Analytics](./docs/LEAD-ANALYTICS.md) - Saved test submissions, dashboard definitions, retention, and AWS monitoring
+- [Pilot Architecture and Action Plan](./docs/PILOT-ARCHITECTURE.md) - Reliability diagram, detailed implementation steps, conversation state, and pilot acceptance checks
+- [Pilot Cost Estimate](./docs/PILOT-COSTS.md) - Pay-per-use estimates, assumptions, exclusions, and cost controls for 100 conversations per day
 - [Architecture](./ARCHITECTURE.md) - Technical architecture details
 - [API Documentation](./API.md) - REST API reference
 - [Integration Guide](./INTEGRATIONS.md) - Third-party integrations

@@ -205,8 +205,8 @@ across the website tester and WhatsApp adapter. Worker restarts preserve progres
 ## 6. Conversation and message state: remember progress
 
 A durable key-value store such as DynamoDB is suitable for these records.
-The existing optional conversation-logging code is not a session or
-deduplication implementation and is not enabled in the deployed stack.
+The removed legacy conversation logger was not a session or deduplication
+implementation. The current lead table stores submissions, not conversation state.
 
 | Logical record | Required information |
 | --- | --- |

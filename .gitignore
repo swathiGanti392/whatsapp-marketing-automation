@@ -17,6 +17,8 @@ __pycache__/
 .env
 .env.local
 .env.*.local
+# Keep .env.example for reference
+
 
 # Logs
 logs/
@@ -56,5 +58,10 @@ keys/
 *.pem
 *.key
 
-# Docker
-.dockerignore
+
+# Local environments and SAM output
+.venv/
+venv/
+.aws-sam/
+outputs/
+work/

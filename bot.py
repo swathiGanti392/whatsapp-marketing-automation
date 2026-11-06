@@ -1,14 +1,16 @@
-"""
-WhatsApp Auto-Reply Bot
-A simple bot that automatically replies to incoming WhatsApp messages
-"""
+"""Shraddha Properties webhook, workflow simulation, and test lead APIs."""
 
 import os
 import logging
-from flask import Flask, request, jsonify
-import boto3
+from flask import Flask, request, jsonify, abort
+from twilio.request_validator import RequestValidator
+from conversation import run_workflow
+from lead_analytics import save_submission, analytics
+from twilio.rest import Client
+from twilio.twiml.messaging_response import MessagingResponse
 import json
-from datetime import datetime
+from datetime import datetime, timezone
+from functools import lru_cache
 
 # Configure logging
 logging.basicConfig(
@@ -19,176 +21,150 @@ logger = logging.getLogger(__name__)
 
 # Initialize Flask app
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 64 * 1024
 
-# WhatsApp Business API configuration
-WHATSAPP_PHONE_NUMBER_ID = os.getenv('WHATSAPP_PHONE_NUMBER_ID')
-WHATSAPP_ACCESS_TOKEN = os.getenv('WHATSAPP_ACCESS_TOKEN')
-VERIFY_TOKEN = os.getenv('VERIFY_TOKEN', 'your_verify_token')
 
-# DynamoDB table for storing conversations (optional)
-DYNAMODB_TABLE = os.getenv('DYNAMODB_TABLE', 'whatsapp-conversations')
+@app.after_request
+def test_cors(response):
+    origin = request.headers.get('Origin', '')
+    allowed = os.getenv('TEST_SITE_ORIGIN', '')
+    if allowed and origin == allowed and request.path in ('/test/workflow','/test/leads','/test/analytics'):
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        response.headers['Vary'] = 'Origin'
+    return response
 
-# Simple in-memory storage for auto-reply messages (can be replaced with database)
-AUTO_REPLY_MESSAGES = {
-    'default': "Hello! Thank you for your message. This is an automated response. Our team will get back to you shortly.",
-    'greeting': "Hi there! 👋 Welcome to our WhatsApp business account. How can we help you today?",
-    'hours': "Our business hours are 9 AM - 6 PM, Monday to Friday. We'll respond as soon as possible!",
-    'support': "For support, please email us at support@example.com or call +1-234-567-8900."
-}
 
-# Initialize DynamoDB client if table is configured
-dynamodb = None
-if DYNAMODB_TABLE != 'whatsapp-conversations':
+@app.route('/test/leads',methods=['POST','OPTIONS'])
+def submit_lead():
+    if request.method=='OPTIONS': return '',204
     try:
-        dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
-        table = dynamodb.Table(DYNAMODB_TABLE)
-        logger.info(f"Connected to DynamoDB table: {DYNAMODB_TABLE}")
+        result=save_submission(request.get_json(silent=True))
+        if not result['duplicate']:
+            logger.warning(json.dumps({'event':'lead_saved','kind':result['kind'],'source':'web_test'}))
+        return jsonify(result),200 if result['duplicate'] else 201
+    except ValueError as e:
+        return jsonify({'error':str(e)}),400
     except Exception as e:
-        logger.warning(f"Could not connect to DynamoDB: {e}")
-        dynamodb = None
+        logger.error('Lead storage failed (%s)',type(e).__name__)
+        return jsonify({'error':'Could not save your request. Retry with the same submission.'}),503
 
 
-def get_auto_reply_message(incoming_message: str, phone_number: str) -> str:
-    """
-    Generate an auto-reply based on the incoming message content
-    """
-    message_lower = incoming_message.lower()
-    
-    # Check for keywords to determine response
-    if any(word in message_lower for word in ['hello', 'hi', 'hey', 'greetings']):
-        return AUTO_REPLY_MESSAGES['greeting']
-    elif any(word in message_lower for word in ['hours', 'time', 'when', 'open']):
-        return AUTO_REPLY_MESSAGES['hours']
-    elif any(word in message_lower for word in ['help', 'support', 'issue', 'problem']):
-        return AUTO_REPLY_MESSAGES['support']
-    else:
-        return AUTO_REPLY_MESSAGES['default']
-
-
-def save_conversation(phone_number: str, incoming_message: str, reply_message: str):
-    """
-    Save conversation to DynamoDB (if configured)
-    """
-    if dynamodb is None:
-        return
-    
+@app.route('/test/analytics',methods=['GET','OPTIONS'])
+def lead_dashboard():
+    if request.method=='OPTIONS': return '',204
+    days=request.args.get('days','7')
+    if days not in ('7','30'): return jsonify({'error':'Choose 7 or 30 days.'}),400
     try:
-        table.put_item(
-            Item={
-                'phone_number': phone_number,
-                'timestamp': datetime.now().isoformat(),
-                'incoming_message': incoming_message,
-                'reply_message': reply_message
-            }
-        )
-        logger.info(f"Saved conversation for {phone_number}")
+        response=jsonify(analytics(int(days)))
+        response.headers['Cache-Control']='no-store'
+        return response
     except Exception as e:
-        logger.error(f"Error saving conversation: {e}")
+        logger.error('Lead analytics failed (%s)',type(e).__name__)
+        return jsonify({'error':'Analytics are temporarily unavailable. Please refresh.'}),503
 
 
-@app.route('/webhook/whatsapp', methods=['GET'])
-def verify_webhook():
-    """
-    Verify webhook with WhatsApp
-    This is required when setting up the webhook in WhatsApp Business API
-    """
-    mode = request.args.get('hub.mode')
-    token = request.args.get('hub.verify_token')
-    challenge = request.args.get('hub.challenge')
-    
-    if mode == 'subscribe' and token == VERIFY_TOKEN:
-        logger.info("Webhook verified successfully")
-        return challenge, 200
-    else:
-        logger.warning("Webhook verification failed")
-        return jsonify({'status': 'error', 'message': 'Invalid verification token'}), 403
+@app.route('/test/workflow', methods=['POST', 'OPTIONS'])
+def test_workflow():
+    """Public demo simulation only: no Twilio sends, credentials or private logs."""
+    if request.method == 'OPTIONS':
+        return '', 204
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not isinstance(data.get('message'), str):
+        return jsonify({'error':'Please provide a text message.'}), 400
+    if not data['message'].strip() or len(data['message']) > 1000:
+        return jsonify({'error':'Enter a message between 1 and 1,000 characters.'}), 400
+    result = run_workflow(data['message'])
+    logger.warning(json.dumps({'event':'workflow_test_response','workflow':result,'delivery':'captured_only'}))
+    return jsonify({**result, 'mode':'capture', 'engine':'live_aws',
+                    'trace':['receive','recognize','catalog','generate','capture']}), 200
+
+@lru_cache(maxsize=1)
+def get_twilio_client():
+    """Initialize sending only when requested; capture mode needs no REST client."""
+    account_sid = os.getenv('TWILIO_ACCOUNT_SID')
+    token = os.getenv('TWILIO_AUTH_TOKEN')
+    if not account_sid or not token:
+        raise RuntimeError('Twilio sending credentials are not configured')
+    return Client(account_sid, token)
 
 
 @app.route('/webhook/whatsapp', methods=['POST'])
 def webhook_handler():
     """
-    Handle incoming WhatsApp messages
+    Handle incoming WhatsApp messages from Twilio
     """
-    data = request.json
-    
-    logger.info(f"Received webhook event: {json.dumps(data, indent=2)}")
-    
+    # Fail closed; pin the exact external URL so proxy headers cannot change it.
+    token = os.getenv('TWILIO_AUTH_TOKEN', '')
+    external_url = os.getenv('TWILIO_WEBHOOK_URL') or request.environ.get('twilio.external_url', '')
+    if not token or not external_url:
+        return jsonify({'error': 'Webhook security is not configured'}), 503
+    if not RequestValidator(token).validate(
+            external_url, request.form, request.headers.get('X-Twilio-Signature', '')):
+        abort(403)
+    if not request.form.get('From') or not request.form.get('MessageSid'):
+        abort(400)
+    # Get message details from Twilio webhook
+    from_number = request.form.get('From', '')
+    message_body = request.form.get('Body', '')
+    message_sid = request.form.get('MessageSid', '')
+
+    if len(message_body) > 4000:
+        abort(400)
+
     try:
-        # Extract message details
-        entry = data.get('entry', [{}])[0]
-        changes = entry.get('changes', [{}])[0]
-        value = changes.get('value', {})
-        
-        if value.get('field') == 'messages':
-            messages = value.get('messages', [])
-            
-            for message in messages:
-                # Extract message details
-                phone_number = message.get('from')
-                message_id = message.get('id')
-                message_type = message.get('type')
-                
-                # Handle text messages
-                if message_type == 'text':
-                    text_content = message.get('text', {}).get('body', '')
-                    logger.info(f"Received message from {phone_number}: {text_content}")
-                    
-                    # Generate auto-reply
-                    reply_message = get_auto_reply_message(text_content, phone_number)
-                    
-                    # Send reply
-                    send_whatsapp_message(phone_number, reply_message)
-                    
-                    # Save conversation
-                    save_conversation(phone_number, text_content, reply_message)
-                    
-                # Handle other message types (media, location, etc.)
-                else:
-                    logger.info(f"Received {message_type} message from {phone_number}")
-                    reply_message = AUTO_REPLY_MESSAGES['default']
-                    send_whatsapp_message(phone_number, reply_message)
-                    save_conversation(phone_number, f"[{message_type}] message", reply_message)
-        
-        return jsonify({'status': 'success'}), 200
-    
+        # Generate auto-reply
+        workflow = run_workflow(message_body)
+        reply_message = workflow['response']
+        if os.getenv('REPLY_TRANSPORT') == 'capture':
+            # Trial mode records generated replies for inspection and automation.
+            logger.warning(json.dumps({'event':'workflow_response','message_sid':message_sid,
+                                      'input':message_body,'workflow':workflow,
+                                      'delivery':'captured_only'}, ensure_ascii=True))
+            return '', 204
+
+        # Some trial webhook paths reject TwiML; REST delivery is independently tracked.
+        use_rest = os.getenv('REPLY_TRANSPORT', 'twiml') == 'rest'
+        if use_rest:
+            sender = request.form.get('To', '')
+            if not sender.startswith('whatsapp:'):
+                abort(400)
+            delivered = send_whatsapp_message(from_number, reply_message, sender)
+            if delivered is None:
+                raise RuntimeError('Twilio rejected outbound reply')
+
+        # Twilio delivers the reply contained in this TwiML response.
+        resp = MessagingResponse()
+        if not use_rest:
+            resp.message(reply_message)
+        return str(resp), 200, {'Content-Type': 'text/xml; charset=utf-8'}
+
     except Exception as e:
-        logger.error(f"Error processing webhook: {e}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        logger.error("Webhook processing failed (%s)", type(e).__name__)
+        return str(MessagingResponse()), 500
 
 
-def send_whatsapp_message(phone_number: str, message: str):
+def send_whatsapp_message(phone_number: str, message: str, sender: str = None):
     """
-    Send a message via WhatsApp Business API
+    Send a message via Twilio WhatsApp API
     """
-    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
-    
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    
-    data = {
-        "messaging_product": "whatsapp",
-        "to": phone_number,
-        "type": "text",
-        "text": {
-            "body": message
-        }
-    }
-    
     try:
-        import requests
-        response = requests.post(url, headers=headers, json=data)
-        
-        if response.status_code == 200:
-            logger.info(f"Message sent successfully to {phone_number}")
-            return response.json()
-        else:
-            logger.error(f"Failed to send message: {response.text}")
-            return None
-    
+        # Format phone number for Twilio (add whatsapp: prefix)
+        to_number = "whatsapp:" + phone_number.removeprefix("whatsapp:")
+        from_number = "whatsapp:" + (sender or os.getenv("TWILIO_WHATSAPP_NUMBER", "")).removeprefix("whatsapp:")
+
+        message = get_twilio_client().messages.create(
+            body=message,
+            from_=from_number,
+            to=to_number
+        )
+
+        logger.info("Outbound message sent")
+        return message
+
     except Exception as e:
-        logger.error(f"Error sending message: {e}")
+        logger.error("Outbound message failed (%s)", type(e).__name__)
         return None
 
 
@@ -199,26 +175,11 @@ def health_check():
     """
     return jsonify({
         'status': 'healthy',
-        'timestamp': datetime.now().isoformat()
+        'timestamp': datetime.now(timezone.utc).isoformat()
     }), 200
 
 
-@app.route('/config/replies', methods=['GET', 'POST'])
-def manage_replies():
-    """
-    Get or update auto-reply messages
-    """
-    if request.method == 'GET':
-        return jsonify(AUTO_REPLY_MESSAGES)
-    
-    elif request.method == 'POST':
-        new_replies = request.json
-        AUTO_REPLY_MESSAGES.update(new_replies)
-        logger.info(f"Updated auto-reply messages: {new_replies}")
-        return jsonify({'status': 'success', 'messages': AUTO_REPLY_MESSAGES})
-
-
 if __name__ == '__main__':
-    port = int(os.getenv('PORT', 5000))
+    port = int(os.getenv('PORT', 5001))
     logger.info(f"Starting WhatsApp Auto-Reply Bot on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False)

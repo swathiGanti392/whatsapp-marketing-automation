@@ -1,126 +1,99 @@
-# Property listing bot
+# Property bot deployment guide
 
-The existing Flask bot now answers listing questions from `data/listings.json`.
-The included five properties are fictional; replies carry a DEMO DATA warning.
-No model calls or inferred property facts are used. Include an ID in each
-question; conversation context and advanced search filters are not implemented.
+For functionality and local setup, use [README](README.md). For the implemented
+conversation behavior, use [WORKFLOW](WORKFLOW.md). This guide covers the current
+capture-mode backend and its deployment.
 
-Examples:
+## Environment
 
-- `What is the price of DEMO-001?`
-- `Does DEMO-005 allow pets?`
-- `Show details for DEMO-003`
-- `Can I visit DEMO-004?` (returns instructions, does not book a viewing)
+- Runtime: Python 3.12 on Lambda; local development should use Python 3.12.
+- Region: Sydney (`ap-southeast-2`).
+- Stack: `property-whatsapp-bot`.
+- Catalog: packaged `data/listings.json`; all current records are fictional.
+- Mode: `REPLY_TRANSPORT=capture`; no outbound WhatsApp messages are sent.
 
-## Spreadsheet updates
+`.env` is private and is not automatically loaded. Export settings through your
+shell/process manager. `.env.example` contains placeholders only.
 
-Edit the supplied workbook's Listings sheet, keeping column names unchanged.
-Export that sheet alone as UTF-8 CSV. Numbers must be plain numeric values,
-`transaction` must be `rent` or `sale`, `updated_on` must be YYYY-MM-DD.
-Leave unknown facts blank. IDs must be unique, using letters, digits or hyphens.
+| Variable | Purpose |
+| --- | --- |
+| `REPLY_TRANSPORT` | Use `capture` for POC testing; `twiml` and `rest` are opt-in send adapters |
+| `TWILIO_AUTH_TOKEN` | Verify incoming Twilio signatures |
+| `TWILIO_WEBHOOK_URL` | Exact external URL for local/tunnel signature validation |
+| `TWILIO_ACCOUNT_SID` | Needed only for the REST send adapter |
+| `TWILIO_WHATSAPP_NUMBER` | REST sender fallback; incoming `To` is preferred |
+| `LEADS_TABLE` | DynamoDB test lead/visit storage |
+| `TEST_SITE_ORIGIN` | Allowed browser origin for demo APIs |
+| `LISTINGS_FILE` | Optional catalog path override |
+| `PORT` | Local server port; defaults to 5001 |
 
-```bash
-python3 import_listings.py data/sample-property-listings.csv
-python3 -m unittest test_property_bot -v
-```
+In Lambda, the adapter reconstructs the external webhook URL from trusted API
+Gateway request context. It does not trust a caller-supplied Host header for the
+signature URL. Missing webhook security configuration fails closed.
 
-For real data, replace ALL demo rows, then import with `--real-data`. That flag
-removes the demo warning. Imports validate before replacing the previous catalog.
-The Lambda catalog is a packaged snapshot: rebuild and deploy after each import.
-The bot does not directly read Excel or a live Google Sheet.
+## AWS prerequisites
 
-## Local Twilio setup
+Use AWS CLI credentials/profile, SAM CLI, Python 3.12 and make. Verify the
+intended AWS account and region before deploying. Use short-lived credentials
+where available. The current session's deployment identifiers are in
+[the handoff](docs/RESUME.md).
 
-Install dependencies using your usual virtual environment. Set these environment
-variables in your shell/process manager:
+The stack expects Secrets Manager secret `property-bot/twilio` with JSON fields
+`auth_token` and `account_sid`. Create/manage it through your approved secret
+process. Never put secret values in command arguments, source, logs, or docs.
+CloudFormation resolves dynamic references into the Lambda environment. Increment
+`ConfigurationRevision` and redeploy after changing the secret to refresh it.
 
-- `TWILIO_AUTH_TOKEN`: Twilio account auth token, never commit it.
-- `TWILIO_WEBHOOK_URL`: exact HTTPS URL configured in Twilio, including any query.
-
-`.env` is not automatically loaded by this application. Use your existing secure
-environment loader; do not print tokens into logs. Start with `python3 bot.py`
-(port 5001), expose HTTPS using your preferred tunnel, and configure the Twilio
-WhatsApp sandbox/sender's incoming-message webhook to POST to
-`https://YOUR-HOST/webhook/whatsapp`. Update TWILIO_WEBHOOK_URL whenever the tunnel
-URL changes. Unsigned requests return 403; missing security settings return 503.
-
-Inbound replies use TwiML, so account SID and WhatsApp sender number are only
-needed if you use the separate outbound helper. The local `/config/replies`
-endpoint is disabled unless ADMIN_API_TOKEN is set and a matching Bearer token
-is provided. It manages legacy canned replies, not the property catalog.
-It is not exposed by the AWS API.
-
-The old `test_bot.py` uses Meta's direct webhook format and the old
-`test_twilio_bot.py` does not sign requests. Neither is a valid security test for
-this bot. Use `test_property_bot.py`; it tests Flask and Lambda without sending
-messages or accessing AWS.
-
-## AWS deployment (not yet deployed)
-
-Use Lambda on-demand Event Functions because API Gateway invokes this Python
-handler per webhook. A persistent HTTP server is unnecessary. The HTTP API keeps
-the front door simple; REST API is the upgrade path if WAF integration or usage
-plans are required. The public Twilio route uses signature authentication in
-the application, rather than a Cognito login that Twilio cannot supply.
-
-Prerequisites: AWS CLI credentials, SAM CLI, Python 3.12 and make. Select your
-AWS profile and region explicitly. In AWS Secrets Manager, create a secret named
-`property-bot/twilio` containing JSON with the key `auth_token` and your Twilio
-auth token. Enter it through your normal secret-management process; never put
-it in source code, CLI parameters, or this document.
-
-The CloudFormation deployment identity needs permission to resolve that secret.
-SAM creates a Lambda execution role with basic logging access; no database,
-model, or secret-fetch permission is needed by the running function. The token
-is resolved into the Lambda environment at deployment. After rotation, increment
-ConfigurationRevision and redeploy to force a configuration update.
+## Build and deploy
 
 ```bash
+make test
 sam build --template-file template.yaml
-sam deploy --guided --template-file .aws-sam/build/template.yaml
+sam validate --lint --template-file .aws-sam/build/template.yaml --region ap-southeast-2
+sam deploy --guided --template-file .aws-sam/build/template.yaml --region ap-southeast-2
 ```
 
-Choose a stack name and AWS region in guided deployment, acknowledge generated
-IAM resources, and supply the secret NAME rather than the token. Only deploy
-after reviewing the change set and costs for your account. Configure the output
-WebhookUrl as the exact POST webhook in Twilio. Send an actual WhatsApp message
-from a sandbox-joined phone to verify the complete integration.
+Review the change set and account costs before deploying. SAM creates the
+execution role and scopes lead-table put/get and date-index query access.
+The DynamoDB table uses on-demand billing, recovery protection and 90-day record
+TTL; it is retained across stack deletion/replacement. CloudWatch retains
+application/access logs for 14 days and provides a business dashboard.
 
-Makefile uses an allowlist for the Lambda artifact. Only bot.py, listings.py,
-lambda_handler.py, dependencies and data/listings.json are copied. It excludes
-.env, git history and unrelated project files. Do not replace it with a recursive
-copy of the repository. SAM itself may stage the source folder locally while
-building; protect the working folder and do not share intermediate build caches.
+The Makefile installs Linux x86_64 Python 3.12 dependencies and copies only the
+allowlisted modules and catalog into the Lambda artifact. Do not replace it
+with a recursive copy of the repository: `.env`, Git history, test artifacts,
+and local environments must remain excluded. Protect local intermediate caches.
 
-CloudWatch retains access/function logs for 14 days. Access logs exclude bodies
-and sender numbers. A Lambda error alarm is included; attach notification actions
-before relying on alerts. Handled HTTP 5xx failures need API monitoring too.
-Conversation logging remains optional legacy code and is disabled in this stack;
-enable it only with an existing compatible table, scoped IAM and a retention plan.
+## Verify
 
-No AWS resources or Twilio settings were changed during local implementation.
-Account-specific permissions, regional deployment and live WhatsApp delivery
-must be verified during deployment. The bot has no durable message deduplication;
-Twilio retries may repeat a TwiML answer. It does not initiate marketing messages.
+```bash
+make test
+```
 
-## Local validation results
+After deployment, verify health, unsigned webhook rejection, signed capture,
+website workflow responses, and lead storage/analytics. `automate_workflow.py`
+provides opt-in signed live capture verification; it requires a securely supplied
+Twilio token, AWS access, the webhook URL and function log-group name. It refuses
+to run unless the deployed function is capture-only.
 
-14 unit/integration tests passed, covering signed and tampered webhooks,
-missing security configuration, ambiguous property selection, unknown facts,
-CSV imports and the API Gateway v2 adapter. The spreadsheet was rendered and
-visually reviewed. cfn-lint 1.60.0 reported no errors or warnings.
+The current Twilio trial rejects custom response bodies/TwiML. Changing XML
+content types does not remove that restriction. Keep capture mode until paid
+sender setup and end-to-end WhatsApp rendering/delivery tracking are ready.
 
-Three AWS Guard registry rules were evaluated against the authored template:
-log retention passed; two rule families reported three resource findings:
+## Removed legacy behavior
 
-- `CLOUDWATCH_ALARM_ACTION_CHECK`: ErrorAlarm has no notification action. Set
-  `AlarmActions` to an existing, approved notification topic ARN before relying
-  on notifications. No recipient was invented during development.
-- `CLOUDWATCH_LOG_GROUP_ENCRYPTED`: ApiLogs and FunctionLogs have no customer
-  managed `KmsKeyId`. Default CloudWatch encryption remains in effect. If your
-  policy requires customer managed keys, supply the key ARN and a suitable key
-  policy for CloudWatch Logs before deployment.
+The unused canned-reply editor and `/config/replies` route were removed. The old
+optional conversation logger was also removed; it was not a session store.
+`LEADS_TABLE` is the supported persistent store for test submissions only.
+The obsolete Meta-format and unsigned manual webhook scripts were replaced by
+the signed local test suite and the opt-in live automation runner.
 
-This was a scoped Guard check, not a full compliance audit of SAM-generated
-resources. No account-aware CloudFormation validation, SAM build, AWS deployment
-or live Twilio delivery test ran: AWS CLI/SAM are unavailable in this environment.
+## Limits
+
+The demo APIs remain publicly callable with throttling; CORS is not
+server-side authentication. The private tester frontend does not change that.
+Do not expose real customer management through them without access controls.
+
+No agent notifications, booking confirmations, durable conversation sessions,
+message queues, or outbound delivery callbacks are implemented. See the
+[roadmap](PRODUCT-ROADMAP.md) and [architecture plan](docs/PILOT-ARCHITECTURE.md).

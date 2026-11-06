@@ -1,0 +1,7 @@
+id,title,location,transaction,price,currency,bedrooms,bathrooms,area_sqft,furnishing,parking,pets,amenities,availability,visit_notes,updated_on,property_type
+DEMO-001,Sample Cedar Apartment,Demo North District,rent,28000.0,INR,2.0,2.0,1100.0,Semi-furnished,1 covered space,Allowed with owner approval,Lift; security,Available,Request a viewing; agent must confirm,2026-11-06,apartment
+DEMO-002,Sample Maple Apartment,Demo North District,sale,8500000.0,INR,3.0,2.0,1550.0,Unfurnished,2 covered spaces,Not recorded,Lift; gym; security,Available,Weekend viewings by confirmed appointment,2026-11-06,apartment
+DEMO-003,Sample Willow Studio,Demo Central District,rent,18000.0,INR,0.0,1.0,480.0,Furnished,No dedicated space,Not allowed,Lift; security,Occupied,No viewings currently recorded,2026-11-06,apartment
+DEMO-004,Sample Oak Villa,Demo West District,sale,16000000.0,INR,4.0,4.0,2800.0,Semi-furnished,2 covered spaces,Allowed,Private garden; terrace,Available,Contact agent to request a viewing,2026-11-06,villa
+DEMO-005,Sample Pine Apartment,Demo East District,rent,35000.0,INR,3.0,2.0,1400.0,Furnished,1 covered space,,Lift; gym,Confirm with agent,,2026-11-06,apartment
+DEMO-006,Sample Lotus Office,Demo Business District,rent,65000,INR,,2,1800,Furnished,2 reserved spaces,,Meeting room; lift; power backup,Available,Request an agent-confirmed viewing,2026-11-06,office

@@ -1,0 +1,200 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Property listing WhatsApp bot using signed Twilio webhooks and a packaged catalog.
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    ref:
+      - at: PROPERTY-BOT.md
+        has: Deployment, data refresh and security constraints
+Parameters:
+  TwilioSecretName:
+    Type: String
+    Default: property-bot/twilio
+    AllowedPattern: '[a-zA-Z0-9/_+=.@-]+'
+    Description: Existing Secrets Manager secret with auth_token JSON key; never pass the token here.
+  ConfigurationRevision:
+    Type: String
+    Default: '2'
+    Description: Increment after secret rotation to refresh the Lambda environment.
+  TestSiteOrigin:
+    Type: String
+    Default: https://shraddha-bot-lab.swathiganti392.chatgpt.site
+    Description: Browser origin allowed to call the public demo-only test route.
+Resources:
+  BotApi:
+    Type: AWS::Serverless::HttpApi
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: HTTP API fronts the synchronous Twilio webhook without a persistent server.
+        must: [Application must verify Twilio signatures before processing messages.]
+    Properties:
+      StageName: '$default'
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 10
+        ThrottlingRateLimit: 5
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiLogs.Arn
+        Format: '{"requestId":"$context.requestId","status":"$context.status","route":"$context.routeKey"}'
+  ApiLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 14
+  PropertyBot:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+      com.aws.cloudformation.Context:
+        why: Capture-only POC serves signed webhooks, demo workflows and aggregate test analytics.
+        must:
+          - Package only allowlisted files; exclude .env and git history.
+          - Only explicitly declared webhook, health and demo test routes are exposed.
+          - Keep lead storage permissions scoped to the table and date index.
+    Properties:
+      CodeUri: .
+      Handler: lambda_handler.handler
+      Runtime: python3.12
+      Timeout: 10
+      MemorySize: 256
+      Environment:
+        Variables:
+          TWILIO_AUTH_TOKEN: !Sub '{{resolve:secretsmanager:${TwilioSecretName}:SecretString:auth_token}}'
+          TWILIO_ACCOUNT_SID: !Sub '{{resolve:secretsmanager:${TwilioSecretName}:SecretString:account_sid}}'
+          REPLY_TRANSPORT: capture
+          TEST_SITE_ORIGIN: !Ref TestSiteOrigin
+          LEADS_TABLE: !Ref LeadsTable
+          CONFIGURATION_REVISION: !Ref ConfigurationRevision
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: [dynamodb:PutItem, dynamodb:GetItem]
+              Resource: !GetAtt LeadsTable.Arn
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !Sub '${LeadsTable.Arn}/index/ByDay'
+      Events:
+        LeadSubmission:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref BotApi
+            Path: /test/leads
+            Method: ANY
+            PayloadFormatVersion: '2.0'
+        LeadAnalytics:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref BotApi
+            Path: /test/analytics
+            Method: ANY
+            PayloadFormatVersion: '2.0'
+        TestWorkflow:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref BotApi
+            Path: /test/workflow
+            Method: ANY
+            PayloadFormatVersion: '2.0'
+        WhatsApp:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref BotApi
+            Path: /webhook/whatsapp
+            Method: POST
+            PayloadFormatVersion: '2.0'
+        Health:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref BotApi
+            Path: /health
+            Method: GET
+            PayloadFormatVersion: '2.0'
+  FunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${PropertyBot}'
+      RetentionInDays: 14
+  LeadsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Durable pilot test lead and visit requests; date index supports small aggregate views.
+        must:
+          - Never return names or contact details through the aggregate analytics API.
+          - Preserve submissions across stack deletion or replacement.
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: day
+          AttributeType: S
+        - AttributeName: created_at
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: ByDay
+          KeySchema:
+            - AttributeName: day
+              KeyType: HASH
+            - AttributeName: created_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: INCLUDE
+            NonKeyAttributes: [kind, property_id, category, status, source, expires_at, contact_hash]
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+  LeadSavedMetric:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref FunctionLogs
+      FilterPattern: '{ $.event = "lead_saved" && $.kind = "lead" }'
+      MetricTransformations:
+        - MetricNamespace: !Sub '${AWS::StackName}/Business'
+          MetricName: LeadsSaved
+          MetricValue: '1'
+          DefaultValue: 0
+  VisitSavedMetric:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref FunctionLogs
+      FilterPattern: '{ $.event = "lead_saved" && $.kind = "visit" }'
+      MetricTransformations:
+        - MetricNamespace: !Sub '${AWS::StackName}/Business'
+          MetricName: VisitsSaved
+          MetricValue: '1'
+          DefaultValue: 0
+  BusinessDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub '${AWS::StackName}-leads'
+      DashboardBody: !Sub |
+        {"widgets":[{"type":"metric","x":0,"y":0,"width":12,"height":6,"properties":{"title":"Test leads and visit requests (saved events)","region":"${AWS::Region}","stat":"Sum","period":300,"metrics":[["${AWS::StackName}/Business","LeadsSaved"],["${AWS::StackName}/Business","VisitsSaved"]]}},{"type":"metric","x":12,"y":0,"width":12,"height":6,"properties":{"title":"Function errors and throttles","region":"${AWS::Region}","stat":"Sum","period":300,"metrics":[["AWS/Lambda","Errors","FunctionName","${PropertyBot}"],["AWS/Lambda","Throttles","FunctionName","${PropertyBot}"]]}},{"type":"metric","x":0,"y":6,"width":12,"height":6,"properties":{"title":"API 5xx failures","region":"${AWS::Region}","stat":"Sum","period":300,"metrics":[["AWS/ApiGateway","5xx","ApiId","${BotApi}"]]}}]}
+  ErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Bot Lambda errors; attach an alarm action for notifications.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref PropertyBot
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+Outputs:
+  WebhookUrl:
+    Description: Configure this exact POST URL in Twilio WhatsApp sandbox or sender settings.
+    Value: !Sub 'https://${BotApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/webhook/whatsapp'

@@ -208,9 +208,7 @@ are also not implemented.
 - [Pay-per-use cost estimate](PILOT-COSTS.md)
 - [Lead and visit analytics](LEAD-ANALYTICS.md)
 - [Implemented conversation workflow](../WORKFLOW.md)
-- [Original deployment guide](../PROPERTY-BOT.md) — historical sections predate
-  capture-mode/rich-card/analytics additions; use this summary and current code
-  for the latest behavior.
+- [Deployment guide](../PROPERTY-BOT.md) — consolidated during repository cleanup.
 
 The earlier planning estimate for 100 conversations/day, 30 days/month:
 Twilio platform fees USD 60/120/180 at 2/4/6 exchanges per conversation, plus an
@@ -222,10 +220,9 @@ before committing to a budget. No paid Twilio upgrade was performed.
 ## Repository status and next-session starting point
 
 Application changes include pre-existing and new uncommitted work. The user
-subsequently requested a product roadmap with weekly timelines/progress bars and
-a documentation push. That documentation update is separate from application
-code; verify Git history and remote state for the outcome. Preserve the user's
-uncommitted application edits. Sites publication separately committed/pushed its
+subsequently requested a roadmap documentation push, then repository cleanup
+and a commit of the application code. Verify Git history and remote state for
+the outcome; a local code commit does not imply a GitHub push. Sites publication separately committed/pushed its
 website source through the Sites helper; that is not a commit to the application
 repository.
 
@@ -239,3 +236,11 @@ For the next session:
 2. Confirm AWS identity, region and deployed state without exposing secrets.
 3. Ask which next feature the user wants, or follow their explicit next request.
 4. Keep the POC capture-only unless sending/paid setup is explicitly authorized.
+
+## Repository cleanup follow-up
+
+The later cleanup removed the obsolete Meta/unsigned manual test scripts,
+placeholder Node manifest, duplicate BOT-README, canned-reply editor, and unused
+conversation logger. README and PROPERTY-BOT are the current entry points.
+Configuration examples contain placeholders only. See Git history for the code
+commit; no AWS or Sites deployment is implied by cleanup.
